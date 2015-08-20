@@ -1,0 +1,188 @@
+---
+title: "Human Activity Recognition - Coursera Project"
+author: "David Cano"
+date: "`r date()`"
+output: html_document
+---
+
+## Introduction
+
+We are building a model on Human Activity Recognition (HAR), in order to predit the *class* variable.
+
+In order to build and test the model, the analysis will be structured as follows:
+
+1. Download train and test data. Exploratory analysis and Data Preparation.
+2. Test some models and verify validity. 
+3. Error calculation and out of sample expected error / cross validation.
+
+Data is available in the following download links:
+
+- [Training data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>)
+- [Testing data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+The data for this project come from this source: <http://groupware.les.inf.puc-rio.br/har>
+
+## Exploratory Analysis and Data Preparation
+
+Data download:
+
+```{r}
+mainDir <- "C:/Users/u531005/Documents/ML"
+subDir <- "Data"
+setwd(mainDir)
+if (!file.exists(subDir)) {dir.create(file.path(mainDir,subDir))}
+# Training data
+#http for Knit compatibility URLTraining <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+URLTraining <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+## MAC: download.file(URLTraining, destfile = "./Data/pml-training.csv", method="curl")
+destfiletraining = "./Data/pml-training.csv"
+if (!file.exists(destfiletraining)){download.file(URLTraining, destfile = "./Data/pml-training.csv")}
+# Testing data
+#http for Knit compatibility URLTesting <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+URLTesting <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+## MAC: download.file(URLTesting, destfile = "./Data/pml-testing.csv", method="curl")
+destfiletesting = "./Data/pml-testing.csv"
+if (!file.exists(destfiletesting)) {download.file(URLTesting, destfile = "./Data/pml-testing.csv")}
+```
+
+Data processing:
+
+```{r}
+pmltraining <- read.csv(file="./Data/pml-training.csv",header=TRUE,sep=",")
+pmltesting <- read.csv(file="./Data/pml-testing.csv",header=TRUE,sep=",")
+```
+
+We can observe than data sets consists of `r ncol(pmltesting)` variables and `r nrow(pmltraining)` observations for training and `r nrow(pmltesting)` observations for testing.
+
+Prediction variable is `classe` that can take `r unique(pmltraining$classe)` different values.
+
+### Data preparation
+
+Observing the data, we might see that some of the variables contain only `NULL` values, that we might be interesting in removing in order to have a cleaner, smaller model. Firstly, we will partition the `pmltraining` data in order to have a training data set and a testing data set to cross-validate the model.
+
+```{r }
+#install.packages("caret");
+suppressWarnings(library(caret))
+inTrain <- createDataPartition(y=pmltraining$classe,p=0.7,list = FALSE)
+pmltrainingTR <- pmltraining[inTrain,] # TR stands for TRAINING DATA SET
+pmltrainingTE <- pmltraining[-inTrain,] # TE stands for TESTING DATA SET
+```
+
+So we have a `r nrow(pmltrainingTR)` # rows data set for training (`pmltrainingTR`) and a `r nrow(pmltrainingTE)` # rows data set for testing (`pmltrainingTE`).
+
+Variables with most of the values NULL or without variance are excluded from the training model:
+
+```{r}
+myDataNZV <- nearZeroVar(pmltrainingTR, saveMetrics=TRUE)
+pmltrainingTR <- pmltrainingTR[, !myDataNZV$nzv]
+```
+
+Meaningless variables (IDs, timestamps, etc) are excluded from the training model as well:
+
+```{r}
+pmltrainingTR <- pmltrainingTR[, -(1:6)]
+```
+
+Variables with more than 60% NAs are removed:
+
+```{r}
+manyzeroes <- sapply(colnames(pmltrainingTR), function(x) if(sum(is.na(pmltrainingTR[, x])) > 0.60*nrow(pmltrainingTR)) {return(TRUE)
+}else{return(FALSE)
+})
+pmltrainingTR <- pmltrainingTR[, !manyzeroes]
+```
+
+So we will be testing the model with `r ncol(pmltrainingTR)` variables.
+
+
+## Fitting a Model
+
+We start setting up a seed, so that this analysis might be reproduced
+
+```{r}
+set.seed(3333)
+```
+
+We check whether the variables that will be used for the training model are correlated. 
+
+```{r}
+M <- abs(cor(pmltrainingTR[,-53]))
+diag(M) <- 0
+which (M > 0.8, arr.ind=T)
+```
+
+so we we see that many variables are correlated, which suggest a PCA method is used as preprocessing during the algorithm training phase.
+
+We will be testing the following models: `method = "rpart"`, `method = "rf"`,  `method = "lda"`. Other methods `method = "nb"` or `method = "gbm"` were tested separately but not included in the reproducible document for perfomance issues.
+
+```{r}
+suppressWarnings(library(rpart))
+suppressWarnings(library(randomForest))
+suppressWarnings(library(MASS))
+
+modelFitrpart <- train(classe ~ ., method = "rpart", preProcess="pca", data = pmltrainingTR) #Trees prediction
+
+# RandomForest takes long time to execute with default parameters.
+# As per discussion in the Course Project, some parameter are adjusted, though precission in the model may be affected
+
+customGrid <- data.frame(mtry=c(5, 9))   # Test with mtry=5 and again with mtry=9
+
+modelFitrf <- train(classe ~ ., method = "rf", data = pmltrainingTR,prox=TRUE,returnData=FALSE, returnResamp="none", savePredictions=FALSE, trControl=trainControl(number=5), tuneGrid=customGrid, ntree=101) #Random Forests, preprocessing removed and model = FALSE for performance issues.
+
+modelFitlda <- train(classe ~ ., method = "lda", preProcess="pca", data = pmltrainingTR) #Model Based Prediction
+
+```
+
+An accuracy of:
+
+```{r}
+model <- c("rpart", "rf", "lda")
+Accuracy <- c(max(modelFitrpart$results$Accuracy),max(modelFitrf$results$Accuracy),max(modelFitlda$results$Accuracy))
+Kappa <- c(max(modelFitrpart$results$Kappa),max(modelFitrf$results$Kappa),max(modelFitlda$results$Kappa))
+cbind(model,Accuracy,Kappa)
+```
+
+has been found. Therefore randomForest method `"rf"` will be used. Cross validation will be performed towards the testing `pmltrainigTE` data.
+
+## Prediction and Cross-Validation
+
+Now lets test the chosen model `modelFitrf` against `pmltrainingTE` data:
+
+```{r}
+rfPrediction <- predict(modelFitrf,pmltrainingTE)
+confusionMatrix(rfPrediction, pmltrainingTE$classe)
+``` 
+
+which results in a great prediction.
+
+A double check can be done, double checking with the other build models, e.g., `rpart`:
+
+```{r}
+rpartPrediction <- predict(modelFitrpart,pmltrainingTE)
+confusionMatrix(rpartPrediction, pmltrainingTE$classe)
+``` 
+
+An small accuracy is shown.
+
+Therefore, `modelFitrf` is considered the chosen ML model for the project.
+
+### Data Submission
+
+As part of the project, data files have to be created over `pmltesting` data. A data validation set.
+
+``` {r}
+predictsubmission <- predict(modelFitrf,pmltesting)
+predictsubmission
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predictsubmission)
+```
+
+This concludes all requested project tasks.
